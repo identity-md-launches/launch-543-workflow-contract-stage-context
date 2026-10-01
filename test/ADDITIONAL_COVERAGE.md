@@ -1,6 +1,23 @@
 # Additional test coverage
 
-This contribution adds tests only. The accepted source, dependencies, configuration and existing tests are unchanged.
+This contribution adds and extends tests only. The accepted source, dependencies and configuration are unchanged.
+
+## Revision: guarded funding and reserved rewards
+
+This revision extends the existing boundary tests and cash-flow handler for the accepted funding changes:
+
+- Two new fuzz properties, 1,000 runs each, check duration rejection followed by an exact-duration retry, and equivalence between the unguarded overload and a zero minimum. Inputs span active and expired periods, both with stakers and with idle emissions. Rejection compares all tracked account state, checkpoints, schedules, balances and allowances; successful funding checks budget conservation and pre-existing rewards.
+- A deterministic rollover regression checks maximum-duration rejection, insufficient allowance after scheduling, and a successful retry that preserves idle rewards, dust and existing claims.
+- The existing four-actor invariant now randomly calls both funding overloads. Active top-ups must preserve the unallocated queue and conserve the sum of future emissions and queued rewards. Rejected guarded calls must restore the entire tracked state. A deterministic handler test requires successful and rejected calls before and after expiry, then settles all principal.
+
+The incoming tree passed 60 tests. The focused revision run passed 17 tests. Final checks used fresh build and cache directories outside the repository:
+
+```sh
+FOUNDRY_OUT=/tmp/imd-e3029858-final-out FOUNDRY_CACHE_PATH=/tmp/imd-e3029858-final-cache forge build --offline
+FOUNDRY_OUT=/tmp/imd-e3029858-final-out FOUNDRY_CACHE_PATH=/tmp/imd-e3029858-final-cache forge test --offline
+```
+
+Both exited 0: **64 tests passed, 0 failed, 0 skipped** across nine suites. The extended vault invariant completed 256 sequences of 128 calls (32,768 calls), including 3,197 guarded-handler calls, with zero unexpected reverts. The existing custody and token invariants also passed. Build lint warnings concerned source timestamps, events after transfers, exact balance checks, and existing handler reads of `block.timestamp` around `vm.warp`; none were suppressed. No confirmed defect requiring a findings report was identified. The protected service harnesses were read, but their service-configured deployment checks were not run locally.
 
 ## Properties and assumptions
 
@@ -12,7 +29,7 @@ The vault model uses the actual configured emission rate and deadline; it indepe
 
 The supported asset is the accepted LaunchToken. These tests do not claim compatibility with arbitrary rebasing or malicious tokens. New tests use no forks, FFI, environment mutation or network dependencies.
 
-## Executed checks
+## Prior-round executed checks
 
 Foundry 1.8.3 and Solc 0.8.26 were available. Build artifacts and analysis output were directed into disposable `test/scratch/` using process environment variables, without changing configuration files.
 
@@ -32,7 +49,7 @@ Both exited 0. The build compiled 38 files. The complete suite passed **53 tests
 
 Before adding tests, `forge build` and `forge test --offline` also passed (32 baseline tests). Focused `forge test --offline --match-path` runs for the three new Solidity files were executed using `FOUNDRY_OUT=test/scratch/out FOUNDRY_CACHE_PATH=test/scratch/cache`. The first token run had one test-harness error: it expected `ERC20InvalidSender` for a zero source, while vendored OpenZeppelin rejects the allowance owner first with `ERC20InvalidApprover`. The expectation was corrected after inspecting that dependency; the final complete run above passed. No implementation failure was asserted as correct or hidden.
 
-## Static analysis
+## Prior-round static analysis
 
 Executed after the initial successful build:
 

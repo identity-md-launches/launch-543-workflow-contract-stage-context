@@ -223,6 +223,97 @@ contract StakingVaultBoundariesTest is Test {
         assertEq(token.balanceOf(address(vault)), 1 + vault.queuedRewards());
     }
 
+    /// forge-config: default.fuzz.runs = 1000
+    function testFuzz_guardedFundingRejectsThenAcceptsExactDuration(uint256 elapsed, uint256 added, bool idle) public {
+        elapsed = bound(elapsed, 0, 2 * D);
+        added = bound(added, D, 1e25);
+        if (!idle) {
+            _stake(ALICE, 3);
+            _stake(BOB, 5);
+        }
+        _fund(D * 8 + 5);
+        vm.warp(START + elapsed);
+        vm.prank(DONOR);
+        token.approve(address(vault), added);
+        uint256 duration = elapsed < D ? D - elapsed : D;
+        uint256 queued = vault.unallocatedRewards();
+        bytes32 beforeState = _state();
+
+        vm.prank(DONOR);
+        vm.expectRevert(abi.encodeWithSelector(StakingVault.RewardDurationTooShort.selector, duration, duration + 1));
+        vault.fundRewards(added, duration + 1);
+        assertEq(_state(), beforeState, "duration rejection must undo all checkpoints and scheduling");
+
+        vm.prank(DONOR);
+        vault.fundRewards(added, duration);
+        assertEq(token.allowance(DONOR, address(vault)), 0);
+        assertEq(token.balanceOf(DONOR), 2e26 - (D * 8 + 5) - added);
+        assertEq(vault.rewardReserve(), D * 8 + 5 + added);
+        assertEq(vault.periodFinish(), START + elapsed + duration);
+        assertEq(vault.earned(ALICE), idle ? 0 : 3 * (elapsed < D ? elapsed : D));
+        assertEq(vault.earned(BOB), idle ? 0 : 5 * (elapsed < D ? elapsed : D));
+        if (elapsed < D) assertGe(vault.queuedRewards(), queued, "active funding must preserve the queue");
+        assertEq(
+            duration * vault.rewardRate() + vault.queuedRewards(),
+            queued + added + (elapsed < D ? 8 * (D - elapsed) : 0),
+            "funding must conserve the undistributed budget"
+        );
+        assertEq(token.balanceOf(address(vault)), vault.totalStaked() + vault.rewardReserve());
+    }
+
+    /// forge-config: default.fuzz.runs = 1000
+    function testFuzz_zeroMinimumMatchesUnguardedFunding(uint256 elapsed, uint256 added, bool idle) public {
+        elapsed = bound(elapsed, 0, 2 * D);
+        added = bound(added, D, 1e25);
+        _fund(D * 8 + 5);
+        if (!idle) {
+            vm.warp(START + D / 2);
+            _stake(ALICE, 3);
+            _stake(BOB, 5);
+        }
+        vm.warp(block.timestamp + elapsed);
+        uint256 snapshot = vm.snapshotState();
+        _fund(added);
+        bytes32 unguardedState = _state();
+        assertTrue(vm.revertToState(snapshot));
+        vm.prank(DONOR);
+        vault.fundRewards(added, 0);
+        assertEq(_state(), unguardedState, "zero minimum must preserve the existing overload's behavior");
+    }
+
+    function test_guardedRolloverRejectsMaximumDurationAndFailedPullWithoutLosingQueue() public {
+        _fund(D * 8 + 5);
+        vm.warp(START + 100);
+        _stake(ALICE, 3);
+        _stake(BOB, 5);
+        vm.warp(START + D + 1);
+        bytes32 beforeState = _state();
+        vm.prank(DONOR);
+        vm.expectRevert(abi.encodeWithSelector(StakingVault.RewardDurationTooShort.selector, D, type(uint256).max));
+        vault.fundRewards(D, type(uint256).max);
+        assertEq(_state(), beforeState);
+
+        vm.prank(DONOR);
+        token.approve(address(vault), D - 1);
+        beforeState = _state();
+        vm.prank(DONOR);
+        vm.expectRevert(
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(vault), D - 1, D)
+        );
+        vault.fundRewards(D, D);
+        assertEq(_state(), beforeState, "failed pull must undo consumption of idle emissions and dust");
+
+        vm.prank(DONOR);
+        token.approve(address(vault), D);
+        vm.prank(DONOR);
+        vault.fundRewards(D, D);
+        assertEq(vault.queuedRewards(), 805);
+        assertEq(vault.rewardRate(), 1);
+        assertEq(vault.periodFinish(), START + 2 * D + 1);
+        assertEq(vault.earned(ALICE), (D - 100) * 3);
+        assertEq(vault.earned(BOB), (D - 100) * 5);
+    }
+
     function _stake(address actor, uint256 amount) internal {
         vm.prank(actor);
         vault.stake(amount);

@@ -30,6 +30,8 @@ contract StakingCashFlowHandler is Test {
     uint256 public withdrawalCalls;
     uint256 public claimCalls;
     uint256 public rejectedCalls;
+    uint256 public guardedFundingCalls;
+    uint256 public rejectedGuardedFundingCalls;
 
     constructor(LaunchToken token_, StakingVault vault_) {
         token = token_;
@@ -72,6 +74,14 @@ contract StakingCashFlowHandler is Test {
     }
 
     function fund(uint256 actorSeed, uint256 amount) external {
+        _fund(actorSeed, amount, false, 0);
+    }
+
+    function fundGuarded(uint256 actorSeed, uint256 amount, uint256 minDuration) external {
+        _fund(actorSeed, amount, true, bound(minDuration, 0, D + 1));
+    }
+
+    function _fund(uint256 actorSeed, uint256 amount, bool guarded, uint256 minDuration) internal {
         uint256 i = actorSeed % 4;
         uint256 wallet = token.balanceOf(actors[i]);
         uint256 minimum = block.timestamp < vault.periodFinish() ? 1 : D;
@@ -80,15 +90,70 @@ contract StakingCashFlowHandler is Test {
         _integrate();
         uint256 finish = vault.periodFinish();
         uint256 rate = vault.rewardRate();
+        uint256 queued = vault.unallocatedRewards();
+        uint256 duration = block.timestamp < finish ? finish - block.timestamp : D;
+        if (guarded && minDuration > duration) {
+            bytes32 beforeState = _fundingState();
+            vm.prank(actors[i]);
+            vm.expectRevert(abi.encodeWithSelector(StakingVault.RewardDurationTooShort.selector, duration, minDuration));
+            vault.fundRewards(amount, minDuration);
+            assertEq(_fundingState(), beforeState, "rejected funding changed vault or wallet state");
+            rejectedCalls++;
+            rejectedGuardedFundingCalls++;
+            return;
+        }
         vm.prank(actors[i]);
-        vault.fundRewards(amount);
+        if (guarded) {
+            vault.fundRewards(amount, minDuration);
+            guardedFundingCalls++;
+        } else {
+            vault.fundRewards(amount);
+        }
         funded[i] += amount;
         fundingCalls++;
         if (block.timestamp < finish) {
             assertEq(vault.periodFinish(), finish, "top-up postponed existing rewards");
             assertGe(vault.rewardRate(), rate, "top-up reduced the rate");
+            assertGe(vault.queuedRewards(), queued, "active top-up spent rewards reserved for a new period");
+            assertEq(
+                duration * vault.rewardRate() + vault.queuedRewards(),
+                duration * rate + queued + amount,
+                "top-up must conserve future emissions and queued rewards"
+            );
         } else {
             assertEq(vault.periodFinish(), block.timestamp + D);
+            assertEq(D * vault.rewardRate() + vault.queuedRewards(), queued + amount);
+        }
+    }
+
+    function _fundingState() internal view returns (bytes32 state) {
+        state = keccak256(
+            abi.encode(
+                vault.totalStaked(),
+                vault.rewardReserve(),
+                vault.rewardRate(),
+                vault.periodFinish(),
+                vault.lastUpdateTime(),
+                vault.rewardPerTokenStored(),
+                vault.queuedRewards(),
+                token.balanceOf(address(vault))
+            )
+        );
+        for (uint256 i; i < 4; ++i) {
+            address actor = actors[i];
+            state = keccak256(
+                abi.encode(
+                    state,
+                    vault.balanceOf(actor),
+                    vault.unlockTime(actor),
+                    vault.rewards(actor),
+                    vault.rewardRemainder(actor),
+                    vault.userRewardPerTokenPaid(actor),
+                    vault.earned(actor),
+                    token.balanceOf(actor),
+                    token.allowance(actor, address(vault))
+                )
+            );
         }
     }
 
@@ -227,7 +292,7 @@ contract StakingVaultModelInvariantTest is Test {
         handler.stake(2, 1e24);
         handler.fund(3, 7 days * 1e12);
         handler.advance(1);
-        bytes4[] memory selectors = new bytes4[](9);
+        bytes4[] memory selectors = new bytes4[](10);
         selectors[0] = handler.stake.selector;
         selectors[1] = handler.unstake.selector;
         selectors[2] = handler.claim.selector;
@@ -237,6 +302,7 @@ contract StakingVaultModelInvariantTest is Test {
         selectors[6] = handler.restart.selector;
         selectors[7] = handler.rejectWithdrawal.selector;
         selectors[8] = handler.rejectUnapprovedStake.selector;
+        selectors[9] = handler.fundGuarded.selector;
         targetContract(address(handler));
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
     }
@@ -301,5 +367,18 @@ contract StakingVaultModelInvariantTest is Test {
         assertGt(handler.claimCalls(), 0);
         assertGt(handler.withdrawalCalls(), 0);
         assertGt(handler.rejectedCalls(), 0);
+    }
+
+    function test_handlerExercisesGuardedFundingRejectionAndRetry() public {
+        handler.fundGuarded(3, 7 days, 7 days);
+        handler.fundGuarded(3, 7 days, 7 days - 1);
+        handler.advance(7 days);
+        handler.fundGuarded(3, 7 days, 7 days + 1);
+        handler.fundGuarded(3, 7 days, 7 days);
+        handler.settle();
+        invariant_eachWalletRetainsItsPrincipalAndProRataRewards();
+        assertEq(handler.guardedFundingCalls(), 2);
+        assertEq(handler.rejectedGuardedFundingCalls(), 2);
+        assertEq(vault.totalStaked(), 0);
     }
 }
