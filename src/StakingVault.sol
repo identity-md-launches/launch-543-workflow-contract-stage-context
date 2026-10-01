@@ -24,7 +24,7 @@ contract StakingVault is ReentrancyGuard {
     uint256 public periodFinish;
     uint256 public lastUpdateTime;
     uint256 public rewardPerTokenStored;
-    /// @notice Checkpointed idle emissions and schedule-division dust available for rescheduling.
+    /// @notice Checkpointed idle emissions and schedule-division dust reserved for a new period.
     uint256 public queuedRewards;
 
     mapping(address account => uint256) public balanceOf;
@@ -41,6 +41,7 @@ contract StakingVault is ReentrancyGuard {
     error NoRewards();
     error InsufficientRewardFunding();
     error ActiveRewardPeriod();
+    error RewardDurationTooShort(uint256 actual, uint256 minimum);
     error UnexpectedTokenAmount();
 
     event Staked(address indexed account, uint256 amount, uint256 unlockAt);
@@ -94,12 +95,25 @@ contract StakingVault is ReentrancyGuard {
 
     /// @notice Irrevocably fund rewards from your own wallet, with an ERC-20 approval first.
     /// @dev An active period keeps its finish time: a tiny top-up cannot delay existing rewards.
-    /// Idle emissions and schedule dust are included. A new period needs at least 604800 minor units.
+    /// Queued rewards are included only in a new period, which needs at least 604800 minor units.
+    /// This overload accepts any remaining duration, even one second.
     function fundRewards(uint256 amount) external nonReentrant {
+        _fundRewards(amount, 0);
+    }
+
+    /// @notice Donate only if the resulting stream has at least minDuration seconds left when mined.
+    /// @dev Use REWARD_DURATION to require a full week. The active period's finish is never extended.
+    function fundRewards(uint256 amount, uint256 minDuration) external nonReentrant {
+        _fundRewards(amount, minDuration);
+    }
+
+    function _fundRewards(uint256 amount, uint256 minDuration) private {
         if (amount == 0) revert ZeroAmount();
         _checkpoint(address(0));
         rewardReserve += amount;
         _schedule(amount);
+        uint256 duration = periodFinish - block.timestamp;
+        if (duration < minDuration) revert RewardDurationTooShort(duration, minDuration);
         _pullExact(amount);
         emit RewardsFunded(msg.sender, amount, rewardRate, periodFinish);
     }
@@ -167,8 +181,10 @@ contract StakingVault is ReentrancyGuard {
 
     function _schedule(uint256 added) private {
         uint256 duration;
-        uint256 budget = queuedRewards + added;
+        uint256 budget = added;
         if (block.timestamp >= periodFinish) {
+            budget += queuedRewards;
+            queuedRewards = 0;
             duration = REWARD_DURATION;
             periodFinish = block.timestamp + duration;
         } else {
@@ -177,7 +193,7 @@ contract StakingVault is ReentrancyGuard {
         }
         rewardRate = budget / duration;
         if (rewardRate == 0) revert InsufficientRewardFunding();
-        queuedRewards = budget % duration;
+        queuedRewards += budget % duration;
         lastUpdateTime = block.timestamp;
     }
 

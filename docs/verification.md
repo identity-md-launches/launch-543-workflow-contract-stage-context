@@ -2,7 +2,24 @@
 
 This is the implementation contributor's verification record, not an independent audit. The supplied protected tests were read as acceptance definitions. Their service-injected deployment environment is not available locally, so those files were not executed or altered. Delivered tests independently exercise factory construction, fixed supply, runtime size, opcode restrictions, and application behavior without environment variables.
 
-## Executed tools
+## Revision verification
+
+Both review reports reproduced on the starting source. The supplied queue proof, copied unchanged into `test/scratch/QueuedRewardsFold.t.sol`, failed with `604800000000000000000001 > 1000000000000000001`; the same proof passed after the correction. Its temporary copy was removed after that check. The original late-top-up behavior also reproduced and remains covered by `test_unboundedLateTopUpUsesRemainingSecondAndCurrentWeights`.
+
+Active top-ups now preserve the idle/dust queue for a new seven-day period. The added `fundRewards(amount, minDuration)` overload lets donors reject a shorter stream at execution time; the original overload remains unbounded. Permanent revision tests cover repeated top-ups, conservation, restart and funding at expiry, queue sharing with future stakers, successful minimum-duration boundaries, delayed-donation and checkpoint rollback, and token failure/reentrancy protection on both funding entrypoints. Findings and their dispositions are recorded in `.imd-responses.json`.
+
+| Revision check | Result |
+| --- | --- |
+| Supplied `Proof_28e0fb441846.t.sol` via its unchanged scratch copy | Failed before the fix; passed afterward |
+| `forge build` | Passed with pinned Solc 0.8.26; lint warning categories remain those discussed below |
+| `forge test` | 39 passed, 0 failed, 0 skipped; three fuzz tests at 256 runs each; invariant at 128 runs × 64 calls = 8192 calls, 0 reverts |
+| `forge fmt --check` | Passed |
+| JSON comparison of both exported ABIs against build artifacts | Exact matches; vault ABI includes the new overload and error |
+| Production runtime sizes | LaunchToken 1784 bytes; StakingVault 4636 bytes |
+
+Slither and the standalone offline checks below belong to the original accepted implementation and were not rerun for this revision. No dependencies, compiler settings, constructor parameters, or deployment responsibilities changed.
+
+## Original implementation checks
 
 | Command | Result |
 | --- | --- |
@@ -20,7 +37,7 @@ This is the implementation contributor's verification record, not an independent
 
 The actual Slither argument was the regular expression `lib/|test/` (the backslash in the table only escapes Markdown's column delimiter). Dependencies and test harnesses were excluded from finding presentation, not from compilation. No detector suppression annotations or exclusions were added to the implementation.
 
-The standalone check copied only `src/`, `test/`, `lib/`, `foundry.toml`, and `remappings.txt` into a temporary directory and used the preinstalled version-pinned compiler. No downloaded compiler or build artifact is part of the deliverable. Compiled production runtime sizes are 1784 bytes for LaunchToken and 4411 bytes for StakingVault.
+The original standalone check copied only `src/`, `test/`, `lib/`, `foundry.toml`, and `remappings.txt` into a temporary directory and used the preinstalled version-pinned compiler. No downloaded compiler or build artifact is part of the deliverable. Original production runtime sizes were 1784 bytes for LaunchToken and 4411 bytes for StakingVault; revised sizes are recorded above.
 
 Aderyn was requested but unavailable. Mythril was not run. No live-chain checks, signed transactions, deployment, or production independent review were performed. This assignment supplies the source and tests needed for the later review stage.
 
@@ -41,7 +58,7 @@ All 10 reported findings were inspected against the supplied token, guarded call
 | Detector | Count | Assessment |
 | --- | --- | --- |
 | `weak-prng` | 2 | False positives. `_accrual` and `_schedule` use modulo solely for accounting remainders. There is no random winner, seed, or randomness-dependent privilege. |
-| `reentrancy-balance` | 1 | False positive for the supported LaunchToken. `_pullExact` intentionally snapshots the balance before `safeTransferFrom` and verifies the increase afterward. Both callers (`stake`, `fundRewards`) are guarded; all five mutable entrypoints reject callback reentry. LaunchToken has no callbacks. Arbitrary malicious/rebasing tokens remain unsupported. |
+| `reentrancy-balance` | 1 | False positive for the supported LaunchToken. `_pullExact` intentionally snapshots the balance before `safeTransferFrom` and verifies the increase afterward. Both callers (`stake`, `fundRewards`) are guarded; all mutable entrypoints reject callback reentry, including the additional funding overload tested in this revision. LaunchToken has no callbacks. Arbitrary malicious/rebasing tokens remain unsupported. |
 | `incorrect-equality` | 2 | Intentional zero checks: `claim` rejects no whole rewards; `_schedule` rejects an unfunded zero-rate period. Neither requires an externally controlled balance to reach a particular value. |
 | `timestamp` | 5 | Accepted mechanism/trust assumption. `unstake`, `claim`, `restartRewards`, `aprBps`, and `_schedule` depend on seconds for the requested lock and reward stream. Tests cover boundaries; chain timestamp variation is not eliminated. No timestamp-derived randomness or oracle value is used. |
 

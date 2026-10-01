@@ -45,11 +45,12 @@ contract FaultToken is ERC20 {
     }
 
     function _attack() internal {
-        bytes[5] memory calls = [
+        bytes[6] memory calls = [
             abi.encodeCall(vault.stake, (1)),
             abi.encodeCall(vault.unstake, (1)),
             abi.encodeCall(vault.claim, ()),
-            abi.encodeCall(vault.fundRewards, (1)),
+            abi.encodeWithSignature("fundRewards(uint256)", 1),
+            abi.encodeWithSignature("fundRewards(uint256,uint256)", 1, 0),
             abi.encodeCall(vault.restartRewards, ())
         ];
         for (uint256 i; i < calls.length; ++i) {
@@ -82,14 +83,16 @@ contract StakingVaultSecurityTest is Test {
     function test_reentryThroughAllMutationsBlockedOnEveryTokenInteraction() public {
         token.configure(vault, false, false, true);
         vault.stake(100 ether);
-        assertEq(token.blockedCallbacks(), 5);
+        assertEq(token.blockedCallbacks(), 6);
         vault.fundRewards(DURATION * 1 ether);
-        assertEq(token.blockedCallbacks(), 10);
+        assertEq(token.blockedCallbacks(), 12);
+        vault.fundRewards(DURATION * 1 ether, DURATION);
+        assertEq(token.blockedCallbacks(), 18);
         vm.warp(block.timestamp + DURATION);
         vault.claim();
-        assertEq(token.blockedCallbacks(), 15);
+        assertEq(token.blockedCallbacks(), 24);
         vault.unstake(100 ether);
-        assertEq(token.blockedCallbacks(), 20);
+        assertEq(token.blockedCallbacks(), 30);
         assertEq(token.balanceOf(address(vault)), 0);
         assertEq(token.balanceOf(address(this)), 1e27);
     }
@@ -100,6 +103,8 @@ contract StakingVaultSecurityTest is Test {
         vault.stake(100 ether);
         vm.expectRevert(abi.encodeWithSelector(SafeERC20.SafeERC20FailedOperation.selector, address(token)));
         vault.fundRewards(100 ether);
+        vm.expectRevert(abi.encodeWithSelector(SafeERC20.SafeERC20FailedOperation.selector, address(token)));
+        vault.fundRewards(100 ether, DURATION);
         assertEq(vault.totalStaked(), 0);
         assertEq(vault.balanceOf(address(this)), 0);
         assertEq(vault.unlockTime(address(this)), 0);
@@ -132,6 +137,8 @@ contract StakingVaultSecurityTest is Test {
         vault.stake(100 ether);
         vm.expectRevert(StakingVault.UnexpectedTokenAmount.selector);
         vault.fundRewards(100 ether);
+        vm.expectRevert(StakingVault.UnexpectedTokenAmount.selector);
+        vault.fundRewards(100 ether, DURATION);
         assertEq(vault.totalStaked(), 0);
         assertEq(vault.rewardReserve(), 0);
         assertEq(token.balanceOf(address(this)), 1e27);
