@@ -1,0 +1,22 @@
+{
+  "kind": "evm_project",
+  "token": {
+    "contract": "LaunchToken",
+    "name": "SevenDay",
+    "symbol": "SEVEN",
+    "decimals": 18
+  },
+  "contracts": [
+    {
+      "contract": "StakingVault",
+      "constructorArgs": ["$token"]
+    }
+  ],
+  "pool": {
+    "pairedCurrency": "0x0000000000000000000000000000000000000000",
+    "fee": 3000,
+    "tickSpacing": 60,
+    "initialPrice": "79228162514264337593543950336"
+  },
+  "notes": "SevenDay (SEVEN) launch: the fixed-supply LaunchToken in src/LaunchToken.sol (no constructor arguments, 18 decimals, 10^27 minor units minted to the factory) plus one application contract. StakingVault in src/StakingVault.sol takes a single address argument, the launch token, supplied as $token. It is ownerless and immutable: no owner, admin, pause, upgrade, fee, rescue or initialization function, so no $owner argument and no post-deployment calls. The vault enforces a 7-day principal lock per wallet (each stake addition resets that wallet's lock), lets anyone fund SEVEN rewards after an ERC-20 approval via fundRewards(amount) or fundRewards(amount, minDuration) (the latter reverts unless the resulting stream has at least minDuration seconds left), streams rewards pro rata per second over 7-day periods, queues emissions that elapse with no stakers plus schedule dust for a new period that anyone can start with restartRewards after the current one ends, keeps reward accounting separate from principal, and lets stakers claim at any time. It starts empty and unfunded; it receives no launch allocation. The pool pairs with native ETH (zero address); fee 3000, tickSpacing 60 and initialPrice are the standard admission values, with the effective opening price and trading fee set by the pinned policy and the chain's LaunchFees contract. The factory supplies the LP, MerkleDistributor and PoolInitializationGuard; none are project contracts. Supply split, allocations, chain, policy and signed artifact linkage belong to the services, not this manifest."
+}
